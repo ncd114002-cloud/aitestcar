@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 體感賽車遊戲 - 修復版</title>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/pose/pose.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; background: #000; overflow: hidden; font-family: sans-serif; color: white; width: 100vw; height: 100vh; }
+        #gameCanvas { display: block; background: #111; margin: 0 auto; }
+        #video-container { 
+            position: fixed; top: 10px; right: 10px; width: 180px; 
+            border: 2px solid #ff0044; border-radius: 8px; overflow: hidden; z-index: 100; background: #000;
+        }
+        #input_video { width: 100%; transform: scaleX(-1); display: none; }
+        #debug_canvas { width: 100%; transform: scaleX(-1); background: #000; height: 135px; }
+        .ui-overlay { position: fixed; top: 20px; left: 20px; z-index: 100; pointer-events: none; }
+        .status-tag { padding: 4px 12px; border-radius: 6px; font-size: 14px; margin-top: 8px; display: inline-block; font-weight: bold; }
+        .status-ok { background: #10b981; }
+        .status-wait { background: #f59e0b; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.5; } 100% { opacity: 1; } }
+    </style>
+</head>
+<body>
+
+    <div class="ui-overlay">
+        <h1 class="text-3xl font-black italic text-red-500 mb-1">NEON RACER</h1>
+        <div id="score" class="text-2xl font-mono">SCORE: 0</div>
+        <div id="ai-status" class="status-tag status-wait">等待攝影機...</div>
+    </div>
+
+    <div id="video-container">
+        <video id="input_video"></video>
+        <canvas id="debug_canvas"></canvas>
+    </div>
+    
+    <!-- 確保畫布有初始寬高 -->
+    <canvas id="gameCanvas" width="500" height="800"></canvas>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const videoElement = document.getElementById('input_video');
+        const aiStatusEl = document.getElementById('ai-status');
+
+        let gameRunning = true;
+        let isSensed = false;
+        let score = 0;
+        let frameCount = 0;
+        let currentSpeed = 7;
+        let playerX = 250;
+        let targetX = 250;
+        const obstacles = [];
+
+        // 自動調整畫布高度
+        function resize() {
+            canvas.height = Math.max(window.innerHeight, 600);
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        /** MediaPipe Pose **/
+        const pose = new Pose({
+            locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose/${file}`
+        });
+
+        pose.setOptions({ modelComplexity: 1, minDetectionConfidence: 0.5 });
+        pose.onResults((results) => {
+            if (results.poseLandmarks) {
+                isSensed = true;
+                aiStatusEl.innerText = "READY";
+                aiStatusEl.className = "status-tag status-ok";
+                const nose = results.poseLandmarks[0];
+                targetX = (1 - nose.x) * canvas.width;
+            } else {
+                isSensed = false;
+                aiStatusEl.innerText = "等待感應...";
+                aiStatusEl.className = "status-tag status-wait";
+            }
+            // 繪製 debug 畫面
+            const dc = document.getElementById('debug_canvas');
+            const dctx = dc.getContext('2d');
+            dctx.drawImage(results.image, 0, 0, dc.width, dc.height);
+        });
+
+        const camera = new Camera(videoElement, {
+            onFrame: async () => { await pose.send({image: videoElement}); },
+            width: 480, height: 360
+        });
+        camera.start();
+
+        function update() {
+            if (!gameRunning) return;
+            frameCount++;
+            score++;
+            playerX += (targetX - playerX) * 0.1;
+
+            if (frameCount % 60 === 0) {
+                obstacles.push({ x: Math.random() * (canvas.width - 100), y: -50, w: 100, h: 20 });
+            }
+            obstacles.forEach((o, i) => {
+                o.y += currentSpeed;
+                if (o.y > canvas.height) obstacles.splice(i, 1);
+            });
+        }
+
+        function draw() {
+            // 背景清除
+            ctx.fillStyle = '#111';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 1. 繪製走道/跑道
+            ctx.strokeStyle = '#333';
+            ctx.lineWidth = 2;
+            // 垂直線
+            for(let i=0; i<=canvas.width; i+=50) {
+                ctx.beginPath(); ctx.moveTo(i, 0); ctx.lineTo(i, canvas.height); ctx.stroke();
+            }
+            // 水平線 (動態)
+            ctx.strokeStyle = '#222';
+            let offset = (frameCount * currentSpeed) % 50;
+            for(let i=0; i<=canvas.height; i+=50) {
+                ctx.beginPath(); ctx.moveTo(0, i + offset); ctx.lineTo(canvas.width, i + offset); ctx.stroke();
+            }
+
+            // 2. 繪製障礙物
+            ctx.fillStyle = '#ffaa00';
+            obstacles.forEach(o => {
+                ctx.fillRect(o.x, o.y, o.w, o.h);
+            });
+
+            // 3. 繪製賽車 (確保即使沒感應到也能看到)
+            ctx.save();
+            ctx.translate(playerX, canvas.height - 150);
+            
+            // 賽車主體
+            ctx.shadowBlur = 15; ctx.shadowColor = '#ff0044';
+            ctx.fillStyle = '#ff0044';
+            ctx.beginPath();
+            ctx.moveTo(-20, 0); ctx.lineTo(20, 0); ctx.lineTo(25, 60); ctx.lineTo(-25, 60); ctx.closePath();
+            ctx.fill();
+            
+            // 玻璃
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(-10, 10, 20, 10);
+            
+            // 如果沒感應到，畫一個提醒圈
+            if (!isSensed) {
+                ctx.strokeStyle = '#fff';
+                ctx.setLineDash([5, 5]);
+                ctx.beginPath(); ctx.arc(0, 30, 60, 0, Math.PI*2); ctx.stroke();
+            }
+            ctx.restore();
+
+            requestAnimationFrame(() => {
+                update();
+                draw();
+            });
+        }
+
+        window.onload = () => {
+            const startBtn = document.createElement('div');
+            startBtn.className = "fixed inset-0 bg-black z-[300] flex items-center justify-center cursor-pointer";
+            startBtn.innerHTML = "<div class='text-white text-4xl font-bold'>點擊開始 (看到跑道為止)</div>";
+            document.body.appendChild(startBtn);
+            startBtn.onclick = () => { startBtn.remove(); draw(); };
+        };
+    </script>
+</body>
+</html>
